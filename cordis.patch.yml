@@ -1,0 +1,4 @@
+- insert:
+    - id: roleplay-chat
+      name: dsh-role-play
+      config: {}
