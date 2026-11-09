@@ -19,6 +19,29 @@ window.__ModuleLoader__.load({
     const LS_MODEL = 'rpChat.model.v1'
     const LS_MODE = 'rpChat.dialogueMode.v1'
     const LS_MAX = 'rpChat.maxTension.v1'
+    const LS_MEMORY = 'rpChat.memory.v1'
+    const LS_STATUS = 'rpChat.status.v1'
+
+    /** 与子插件共享的运行时快照，由 RoleplayView 在状态变化时同步。 */
+    const SHARED = {
+      characters: [],
+      model: null,
+      listeners: new Set(),
+    }
+    function publishShared() {
+      for (const fn of SHARED.listeners) {
+        try {
+          fn()
+        } catch {
+          /* 子插件的监听器出错不应影响主插件 */
+        }
+      }
+    }
+
+    // 滚动摘要参数：最近这么多条原文保留，更早的部分压缩成「前情提要」。
+    const KEEP_RECENT_MESSAGES = 24
+    // 摘要最多保留多少字，超出时让模型再压一次。
+    const SUMMARY_MAX_CHARS = 900
 
     function modelKey(model) {
       return model ? `${model.provider}::${model.model}` : ''
@@ -48,6 +71,43 @@ window.__ModuleLoader__.load({
       modeShortDesc: '一两句话就停，留白更多',
       maxTensionLabel: '加强',
       maxTensionDesc: '张力MAX',
+      memoryLabel: '记忆',
+      memoryAuto: '自动记忆已启动：对话变长后，早期的内容会被压缩成前情提要，角色仍然记得住。',
+      memoryActive: '已有前情提要，早期对话已压缩保存。',
+      memoryCleared: '已清空该角色的记忆。',
+      memoryClear: '清空记忆',
+      memoryClearConfirm: '清空这个角色的前情提要？聊天记录不受影响，但角色会忘掉早期剧情。',
+      memoryView: '查看记忆',
+      memoryViewTitle: '角色的记忆',
+      memoryEmpty: '还没有记忆。聊得久一些（未压缩消息超过 24 条）后，早期对话会自动压缩成前情提要。',
+      memoryCount: '已压缩',
+      memoryCountUnit: '条消息',
+      memoryClose: '关闭',
+      statusLabel: '状态',
+      statusPanelTitle: '角色状态',
+      statusPanelHint: '由角色在对话中体现，会自动更新',
+      statusEmpty: '还没有状态。聊几轮后，角色的情绪和处境会自动记录下来。',
+      statusUpdated: '上次更新',
+      statusRefresh: '重新评估',
+      statusClear: '清空状态',
+      statusClearConfirm: '清空这个角色的状态记录？',
+      statusMood: '情绪',
+      statusScene: '场景',
+      statusRelation: '对你的态度',
+      statusPending: '正在分析…',
+      createTitle: '添加角色',
+      createCustom: '自定义',
+      createCustomDesc: '自己填写全部内容',
+      createRandom: '关键词生成',
+      createRandomDesc: '给几个关键词，让 AI 生成完整角色卡（角色图需自行导入）',
+      createKeywords: '关键词',
+      createKeywordsPlaceholder: '例如：雨夜、外科医生、嘴硬心软、旧伤',
+      createKeywordsHint: '用顿号或逗号分隔，2～6 个词效果最好。生成后角色图需自行导入。',
+      createGenerate: '生成',
+      createGenerating: '正在生成角色…',
+      createFailed: '生成失败，请检查模型是否可用后重试。',
+      createTooShort: '至少填一个关键词。',
+      memoryTip: '长期对话建议保留开启，角色不会因为记录变长而失忆。',
       panelTitle: '对话模式',
       panelHint: '回复长度与情绪强度',
       clearConfirm: '从开场白重新开始这段对话？',
@@ -129,8 +189,7 @@ window.__ModuleLoader__.load({
 .rp-narr{color:var(--dsw-alias-label-secondary)}
 .rp-mind{color:var(--dsw-alias-label-secondary);font-style:italic}.rp-error{margin:0 16px;padding:8px 12px;border-radius:8px;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary);position:relative;z-index:1}
 .rp-composer-wrap{flex:0 0 auto;position:relative}
-.rp-modebar{display:flex;align-items:center;gap:6px;padding:6px 14px 0}
-.rp-modecapsule{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);border-radius:999px;padding:3px 12px;font:inherit;font-size:11px;line-height:1.5;cursor:pointer}
+.rp-modebar{display:flex;align-items:center;gap:6px;padding:6px 14px 0;flex-wrap:wrap}.rp-modecapsule{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);border-radius:999px;padding:3px 12px;font:inherit;font-size:11px;line-height:1.5;cursor:pointer}
 .rp-modecapsule:hover{color:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary)}
 .rp-modecapsule.on{color:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary)}
 .rp-modecapsule .dot{width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-warn-primary);flex:none}
@@ -144,6 +203,26 @@ window.__ModuleLoader__.load({
 .rp-mode-item b{font-size:12px;font-weight:600}
 .rp-mode-item span{font-size:11px;color:var(--dsw-alias-label-secondary)}
 .rp-panel-div{margin:10px 0 8px;border-top:1px solid var(--dsw-alias-border-l1)}
+.rp-mem-panel{width:248px}
+.rp-status-list{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
+.rp-status-row{display:flex;gap:8px;align-items:baseline;font-size:12px;line-height:1.5}
+.rp-status-row b{flex:0 0 auto;color:var(--dsw-alias-label-secondary);font-weight:400;font-size:11px}
+.rp-status-row span{flex:1;min-width:0;color:var(--dsw-alias-label-primary)}
+.rp-create-choices{display:flex;flex-direction:column;gap:8px}
+.rp-create-choice{display:flex;flex-direction:column;align-items:flex-start;gap:3px;padding:12px 14px;border-radius:10px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);color:inherit;cursor:pointer;font:inherit;text-align:left;width:100%}
+.rp-create-choice:hover{border-color:var(--dsw-alias-brand-primary)}
+.rp-create-choice b{font-size:13px;font-weight:600}
+.rp-create-choice span{font-size:11px;color:var(--dsw-alias-label-secondary)}
+.rp-mem-meta-inline{font-size:11px;color:var(--dsw-alias-label-secondary);margin-bottom:8px;padding:5px 8px;background:var(--dsw-alias-bg-layer-2);border-radius:6px}
+.rp-mem-btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.rp-mem-overlay{position:fixed;inset:0;background:rgba(0,0,0,.42);display:flex;align-items:center;justify-content:center;z-index:50;padding:24px}
+.rp-mem-modal{width:min(560px,100%);max-height:min(70vh,600px);display:flex;flex-direction:column;background:var(--dsw-alias-bg-overlay);border:1px solid var(--dsw-alias-border-l1);border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.28);overflow:hidden}
+.rp-mem-head{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--dsw-alias-border-l1);flex:0 0 auto}
+.rp-mem-head-title{font-weight:600;font-size:13px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rp-mem-meta{font-size:11px;color:var(--dsw-alias-label-secondary);padding:8px 16px 0;flex:0 0 auto}
+.rp-mem-body{flex:1 1 auto;min-height:0;overflow-y:auto;padding:10px 16px 16px;font-size:13px;line-height:1.75;white-space:pre-wrap;word-break:break-word;color:var(--dsw-alias-label-primary);overscroll-behavior:contain}
+.rp-mem-empty{color:var(--dsw-alias-label-secondary)}
+.rp-mem-foot{flex:0 0 auto;padding:10px 16px;border-top:1px solid var(--dsw-alias-border-l1);display:flex;justify-content:flex-end;gap:8px}
 .rp-max{padding-top:2px}
 .rp-max-btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);border-radius:999px;padding:4px 14px;font:inherit;font-size:12px;cursor:pointer}
 .rp-max-btn:hover{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}
@@ -201,6 +280,205 @@ window.__ModuleLoader__.load({
     const PORTRAIT_MAX_PX = 1100
     const PORTRAIT_MAX_CHARS = 4000000
 
+    /**
+     * 把一段对话压缩成「前情提要」。用较低温度让摘要稳定、不发挥。
+     * @param messages 要压缩的消息（role/text）
+     * @param previousSummary 已有的摘要，会一并再压缩
+     * @returns 摘要文本；失败时返回 null（调用方保留原摘要，不丢数据）
+     */
+    async function summarizeMessages(messages, previousSummary, model) {
+      const transcript = messages
+        .map((m) => `${m.role === 'user' ? '用户' : '角色'}：${m.text}`)
+        .join('\n')
+      const prompt = `${previousSummary ? `【已有前情提要】\n${previousSummary}\n\n` : ''}【接下来这段对话需要并入前情】
+${transcript}
+
+请把以上内容（连同已有前情，如果有）压缩成一段不超过 ${SUMMARY_MAX_CHARS} 字的前情提要，供角色扮演时参考。要求：
+1. 只写事实和关系变化：发生了什么、双方说了什么要紧的话、关系进展到哪一步、角色表现出什么态度。
+2. 保留具体细节：提到的物品、地点、称呼、承诺、未解决的矛盾。
+3. 用第三人称陈述，不要写成对话，不要加点评和抒情。
+4. 不要遗漏尚未解决的情感线。`
+      try {
+        const res = await fetch('/rp-chat/api/chat', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            system: '你是一个对话摘要助手。只输出摘要正文，不要任何前缀、解释或客套。',
+            messages: [{ role: 'user', text: prompt }],
+            ...(model ? { provider: model.provider, model: model.model } : {}),
+            temperature: 0.2,
+            maxTokens: 900,
+          }),
+        })
+        if (!res.ok || !res.body) return null
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        let acc = ''
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer = parseSseChunk(buffer + decoder.decode(value, { stream: true }), (event) => {
+            if (event.type === 'delta' && typeof event.text === 'string') acc += event.text
+          })
+        }
+        const text = acc.trim()
+        return text === '' ? null : text
+      } catch {
+        return null
+      }
+    }
+
+    /**
+     * 单次非流式补全，复用 /rp-chat/api/chat 的流式接口把内容拼起来。
+     * @returns 完整文本；失败返回 null
+     */
+    async function completeOnce(system, userText, model, temperature = 0.4, maxTokens = 800) {
+      try {
+        const res = await fetch('/rp-chat/api/chat', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            system,
+            messages: [{ role: 'user', text: userText }],
+            ...(model ? { provider: model.provider, model: model.model } : {}),
+            temperature,
+            maxTokens,
+          }),
+        })
+        if (!res.ok || !res.body) return null
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        let acc = ''
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer = parseSseChunk(buffer + decoder.decode(value, { stream: true }), (event) => {
+            if (event.type === 'delta' && typeof event.text === 'string') acc += event.text
+          })
+        }
+        const text = acc.trim()
+        return text === '' ? null : text
+      } catch {
+        return null
+      }
+    }
+
+    /**
+     * 从最近若干轮对话里提炼角色当前状态。
+     * @returns {{ mood: string, scene: string, relation: string, at: number } | null}
+     */
+    async function evaluateStatus(char, messages, model) {
+      const recent = messages.slice(-16)
+      if (recent.length === 0) return null
+      const transcript = recent.map((m) => `${m.role === 'user' ? '用户' : char.name}：${m.text}`).join('\n')
+      const system = `你在分析一段角色扮演对话。只输出 JSON，不要任何解释、不要代码块标记。
+JSON 格式：{"mood":"情绪","scene":"场景","relation":"对用户的态度"}
+每个字段都是简短的中文短语，15 字以内，具体、可感，不要空泛。`
+      const userText = `角色名：${char.name}
+${char.persona ? `角色设定：${char.persona.slice(0, 300)}\n` : ''}最近对话：
+${transcript}
+
+请根据这段对话，输出角色此刻的情绪、所在场景、以及对用户的态度。`
+      const raw = await completeOnce(system, userText, model, 0.3, 300)
+      if (raw === null) return null
+      try {
+        const cleaned = raw.replace(/```json|```/g, '').trim()
+        const start = cleaned.indexOf('{')
+        const end = cleaned.lastIndexOf('}')
+        if (start === -1 || end === -1) return null
+        const parsed = JSON.parse(cleaned.slice(start, end + 1))
+        // 兼容中英文字段名，模型不一定听话。
+        const pick = (...keys) => {
+          for (const k of keys) {
+            const v = parsed[k]
+            if (typeof v === 'string' && v.trim() !== '') return v.trim().slice(0, 24)
+          }
+          return ''
+        }
+        const mood = pick('mood', '情绪', '心情', '状态')
+        const scene = pick('scene', '场景', '情景', '地点', '处境')
+        const relation = pick('relation', '态度', '关系', '对用户的态度', '对用户')
+        if (mood === '' && scene === '' && relation === '') return null
+        return { mood, scene, relation, at: Date.now() }
+      } catch {
+        return null
+      }
+    }
+
+    /**
+     * 根据关键词生成一张完整角色卡。
+     * @returns {{name, avatar, persona, scenario, greeting, desire, guard} | null}
+     */
+    async function generateCharacter(keywords, model) {
+      const system = `你是角色设定助手。根据用户给的关键词，设计一个鲜活的角色扮演角色。
+必须只输出一个 JSON 对象，不要任何解释、不要代码块标记、不要嵌套（所有字段都是字符串，不要有子对象）。
+字段名必须用下列英文键，不要翻译成中文：
+{"name":"名字","avatar":"一个贴切的 emoji","persona":"人物设定，200-350字，写清性格、说话方式、背景、习惯动作","scenario":"情景与世界观，80-150字，说明你们的关系和当前处境","greeting":"开场白，角色说的第一句话，可带括号动作","desire":"这个角色想要什么（推动剧情的欲望），30-60字","guard":"这个角色的心理防线，30-60字"}`
+      const raw = await completeOnce(system, `关键词：${keywords}`, model, 0.9, 1400)
+      if (raw === null) return null
+      try {
+        const cleaned = raw.replace(/```json|```/g, '').trim()
+        const start = cleaned.indexOf('{')
+        const end = cleaned.lastIndexOf('}')
+        if (start === -1 || end === -1) return null
+        const parsed = JSON.parse(cleaned.slice(start, end + 1))
+        const card = normalizeCard(parsed)
+        if (card === null) return null
+        return card
+      } catch {
+        return null
+      }
+    }
+
+    /**
+     * 把模型返回的对象规整成角色卡。模型可能用中文字段名、可能嵌套一层，
+     * 这里同时兼容英文键、中文键和嵌套结构，尽量不让可用结果白白丢掉。
+     * @returns {{name, avatar, persona, scenario, greeting, desire, guard} | null}
+     */
+    function normalizeCard(parsed) {
+      if (parsed === null || typeof parsed !== 'object') return null
+      // 如果外面还包了一层（如 {"角色设定": {...}}），先拆开。
+      let src = parsed
+      const keys = Object.keys(src)
+      if (keys.length === 1 && src[keys[0]] && typeof src[keys[0]] === 'object' && !Array.isArray(src[keys[0]])) {
+        src = src[keys[0]]
+      }
+      const str = (v) => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '')
+      // 每个字段列一组候选键，按顺序取第一个非空值。
+      const ALIASES = {
+        name: ['name', '名字', '姓名', '角色名', '角色', '人物名'],
+        avatar: ['avatar', '头像', 'emoji', '表情'],
+        persona: ['persona', '人设', '人物设定', '性格', '设定', '背景', '角色设定'],
+        scenario: ['scenario', '情景', '世界观', '场景', '情境', '背景设定', '当前处境'],
+        greeting: ['greeting', '开场白', '第一句话', '开场', '初始台词'],
+        desire: ['desire', '欲望', '想要什么', '动机', '渴望'],
+        guard: ['guard', '防线', '心理防线', '防备', '害怕什么'],
+      }
+      const pick = (field) => {
+        for (const key of ALIASES[field]) {
+          const value = str(src[key])
+          if (value !== '') return value
+        }
+        return ''
+      }
+      const name = pick('name')
+      if (name === '') return null
+      const avatarRaw = pick('avatar')
+      // 只保留真正的 emoji；模型给文字描述时用默认值。
+      const avatar = /^[\p{Extended_Pictographic}\uFE0F]{1,4}$/u.test(avatarRaw) ? avatarRaw : '🎭'
+      return {
+        name,
+        avatar,
+        persona: pick('persona'),
+        scenario: pick('scenario'),
+        greeting: pick('greeting'),
+        desire: pick('desire'),
+        guard: pick('guard'),
+      }
+    }
+
     function Avatar({ char }) {
       const src = char?.avatarImage
       if (typeof src === 'string' && src.startsWith('data:image/')) return h('img', { className: 'rp-avatar-img', src, alt: '' })
@@ -240,7 +518,7 @@ window.__ModuleLoader__.load({
       })
     }
 
-    function buildSystem(char, dialogueMode, maxTension) {
+    function buildSystem(char, dialogueMode, maxTension, memorySummary) {
       const parts = []
       parts.push(`你正在扮演角色「${char.name}」进行沉浸式角色扮演对话。始终保持角色，不要替用户发言或行动，用用户使用的语言回复。`)
       // 张力 MAX 放在最前面：模型对开头指令的服从度最高，放在末尾容易被后续格式要求稀释。
@@ -297,6 +575,12 @@ window.__ModuleLoader__.load({
         if (desire !== '') lines.push(`他/她真正想要的是：${desire}`)
         if (guard !== '') lines.push(`他/她的心理防线是：${guard}`)
         parts.push(lines.join('\n'))
+      }
+      // 前情提要：早期对话的压缩摘要，让模型记得住很久以前发生的事。
+      const summary = typeof memorySummary === 'string' ? memorySummary.trim() : ''
+      if (summary !== '') {
+        parts.push(`【前情提要】（你们之前发生过的事，已经压缩过一次，请把它当成真实发生过的经历，保持设定和关系的一致性，不要与前情矛盾）：
+${summary}`)
       }
       parts.push(`格式要求（严格遵守）：
 1. 角色的台词直接写，不加引号。
@@ -521,7 +805,25 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
         return v === 'long' || v === 'medium' || v === 'short' ? v : 'medium'
       })
       const [maxTension, setMaxTension] = useState(() => Boolean(loadJson(LS_MAX, false)))
+      // 每个角色一份记忆：{ [charId]: { summary: string, summarizedUpTo: number } }
+      // summarizedUpTo = 已经并入摘要的消息条数（永远从 0 开始算）。
+      const [memories, setMemories] = useState(() => loadJson(LS_MEMORY, {}))
+      // 每个角色一份状态：{ [charId]: { mood, scene, relation, at } }
+      const [statuses, setStatuses] = useState(() => loadJson(LS_STATUS, {}))
+      const [statusPanelOpen, setStatusPanelOpen] = useState(false)
+      const [statusPending, setStatusPending] = useState(false)
+      // 添加角色：选择面板 + 关键词生成。
+      const [createPanelOpen, setCreatePanelOpen] = useState(false)
+      const [createMode, setCreateMode] = useState(null) // 'custom' | 'random'
+      const [keywords, setKeywords] = useState('')
+      const [generating, setGenerating] = useState(false)
+      const [generateError, setGenerateError] = useState('')
+      // 摘要更新不应重建 runCompletion（否则会打断进行中的流式回复），用 ref 读取最新值。
+      const memoriesRef = useRef(memories)
+      memoriesRef.current = memories
       const [modePanelOpen, setModePanelOpen] = useState(false)
+      const [memoryViewOpen, setMemoryViewOpen] = useState(false)
+      const [memoryPanelOpen, setMemoryPanelOpen] = useState(false)
       const [atTop, setAtTop] = useState(true)
       const [atBottom, setAtBottom] = useState(true)
       const scrollRef = useRef(null)
@@ -568,9 +870,17 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
       useEffect(() => {
         saveJson(LS_MAX, maxTension)
       }, [maxTension])
+      useEffect(() => {
+        saveJson(LS_MEMORY, memories)
+      }, [memories])
+      useEffect(() => {
+        saveJson(LS_STATUS, statuses)
+      }, [statuses])
 
       useEffect(() => {
         saveJson(LS_CHARACTERS, characters)
+        SHARED.characters = Array.isArray(characters) ? characters : []
+        publishShared()
       }, [characters])
       useEffect(() => {
         saveJson(LS_CHATS, chats)
@@ -665,6 +975,13 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
           delete next[id]
           return next
         })
+        // 删角色时一并删掉这个角色的记忆，避免 localStorage 里留下孤儿数据。
+        setMemories((prev) => {
+          if (!prev[id]) return prev
+          const next = { ...prev }
+          delete next[id]
+          return next
+        })
         setSelectedId((prev) => (prev === id ? null : prev))
         setEditing(null)
       }, [t])
@@ -677,6 +994,13 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
           ...prev,
           [selected.id]: greeting === '' ? [] : [{ role: 'assistant', text: greeting, time: Date.now() }],
         }))
+        // 回到开场白等于重新开始，之前的记忆也要一起清掉。
+        setMemories((prev) => {
+          if (!prev[selected.id]) return prev
+          const next = { ...prev }
+          delete next[selected.id]
+          return next
+        })
         setError('')
       }, [selected, streaming, t])
 
@@ -691,12 +1015,16 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
           let acc = ''
           try {
             const outgoing = requestMessages ?? history
+            // 记忆：早期部分已并入摘要，这里只发最近的消息，避免上下文无限增长。
+            const mem = memoriesRef.current[char.id] ?? null
+            const cursor = typeof mem?.summarizedUpTo === 'number' ? mem.summarizedUpTo : 0
+            const trimmed = cursor > 0 && cursor <= outgoing.length ? outgoing.slice(cursor) : outgoing
             const res = await fetch('/rp-chat/api/chat', {
               method: 'POST',
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify({
-                system: buildSystem(char, dialogueMode, maxTension),
-                messages: outgoing.map((m) => ({ role: m.role, text: m.text })),
+                system: buildSystem(char, dialogueMode, maxTension, mem?.summary ?? ''),
+                messages: trimmed.map((m) => ({ role: m.role, text: m.text })),
                 ...(effectiveModel ? { provider: effectiveModel.provider, model: effectiveModel.model } : {}),
                 // 温和的采样，让表达更自然、少一点八股味。
                 temperature: 0.85,
@@ -726,12 +1054,37 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
             setError(e instanceof Error ? e.message : String(e))
           } finally {
             const reply = acc.trim() !== '' ? { role: 'assistant', text: acc, time: Date.now() } : null
+            const nextHistory = reply === null ? history : [...history, reply]
             setChats((prev) => ({
               ...prev,
-              [char.id]: reply === null ? history : [...history, reply],
+              [char.id]: nextHistory,
             }))
             setLive('')
             setStreaming(false)
+            // 滚动摘要：未摘要的消息太多时，把最早的一批并进摘要。
+            // 用 setTimeout 让界面先更新，摘要失败也不影响聊天。
+            const mem = memoriesRef.current[char.id] ?? null
+            const cursor = typeof mem?.summarizedUpTo === 'number' ? mem.summarizedUpTo : 0
+            if (nextHistory.length - cursor > KEEP_RECENT_MESSAGES) {
+              const cut = nextHistory.length - KEEP_RECENT_MESSAGES
+              const batch = nextHistory.slice(cursor, cut)
+              setTimeout(async () => {
+                const summary = await summarizeMessages(batch, mem?.summary ?? '', effectiveModel)
+                if (summary === null) return // 失败就不推进游标，下次再试，不丢数据
+                setMemories((prev) => ({
+                  ...prev,
+                  [char.id]: { summary, summarizedUpTo: cut },
+                }))
+              }, 0)
+            }
+            // 状态评估：每轮结束后异步刷新角色状态，失败不影响聊天。
+            if (nextHistory.length >= 2) {
+              setTimeout(async () => {
+                const next = await evaluateStatus(char, nextHistory, effectiveModel)
+                if (next === null) return
+                setStatuses((prev) => ({ ...prev, [char.id]: next }))
+              }, 0)
+            }
           }
         },
         [effectiveModel, dialogueMode, maxTension],
@@ -794,9 +1147,123 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
         })
       const startNew = () => setEditing({ id: undefined, name: '', avatar: '', avatarImage: null, portraitImage: null, persona: '', scenario: '', greeting: '', desire: '', guard: '' })
 
+      // 点面板外部关闭（对话模式 / 记忆），符合浮层的常见交互习惯。
+      useEffect(() => {
+        if (!modePanelOpen && !memoryPanelOpen && !statusPanelOpen) return
+        const onDown = (e) => {
+          const el = e.target
+          if (el && typeof el.closest === 'function' && el.closest('.rp-panel, .rp-modebar')) return
+          setModePanelOpen(false)
+          setMemoryPanelOpen(false)
+          setStatusPanelOpen(false)
+        }
+        window.addEventListener('mousedown', onDown)
+        return () => window.removeEventListener('mousedown', onDown)
+      }, [modePanelOpen, memoryPanelOpen, statusPanelOpen])
+
+      // 记忆弹层：Esc 关闭。
+      useEffect(() => {
+        if (!memoryViewOpen) return
+        const onKey = (e) => {
+          if (e.key === 'Escape') setMemoryViewOpen(false)
+        }
+        window.addEventListener('keydown', onKey)
+        return () => window.removeEventListener('keydown', onKey)
+      }, [memoryViewOpen])
+
+      // 添加角色弹层：Esc 关闭（生成中不打断）。
+      useEffect(() => {
+        if (!createPanelOpen) return
+        const onKey = (e) => {
+          if (e.key === 'Escape' && !generating) closeCreatePanel()
+        }
+        window.addEventListener('keydown', onKey)
+        return () => window.removeEventListener('keydown', onKey)
+      }, [createPanelOpen, generating])
+
       const modeCapsuleLabel = () => {
         const name = dialogueMode === 'long' ? t('modeLong') : dialogueMode === 'short' ? t('modeShort') : t('modeMedium')
         return `${t('dialogueMode')} · ${name}`
+      }
+
+      // 当前角色是否已有前情提要（用于面板显示与清空按钮）。
+      const currentMemory = selected ? memories[selected.id] : null
+      const summariesAvailable = Boolean(currentMemory && typeof currentMemory.summary === 'string' && currentMemory.summary.trim() !== '')
+      const clearMemory = () => {
+        if (!selected || streaming) return
+        if (!window.confirm(t('memoryClearConfirm'))) return
+        setMemories((prev) => {
+          const next = { ...prev }
+          delete next[selected.id]
+          return next
+        })
+      }
+
+      // 角色状态：当前角色的状态对象，以及手动刷新/清空。
+      const currentStatus = selected ? statuses[selected.id] : null
+      const hasStatus = Boolean(
+        currentStatus && (currentStatus.mood || currentStatus.scene || currentStatus.relation),
+      )
+      const refreshStatus = async () => {
+        if (!selected || statusPending) return
+        setStatusPending(true)
+        try {
+          const next = await evaluateStatus(selected, chats[selected.id] ?? [], effectiveModel)
+          if (next !== null) setStatuses((prev) => ({ ...prev, [selected.id]: next }))
+        } finally {
+          setStatusPending(false)
+        }
+      }
+      const clearStatus = () => {
+        if (!selected) return
+        if (!window.confirm(t('statusClearConfirm'))) return
+        setStatuses((prev) => {
+          const next = { ...prev }
+          delete next[selected.id]
+          return next
+        })
+      }
+
+      // 添加角色：关闭面板并清空临时状态。
+      const closeCreatePanel = () => {
+        setCreatePanelOpen(false)
+        setCreateMode(null)
+        setKeywords('')
+        setGenerateError('')
+      }
+
+      // 关键词生成：调用模型生成完整角色卡，然后直接打开编辑器让用户过目调整。
+      const runGenerate = async () => {
+        const kw = keywords.trim()
+        if (kw === '') {
+          setGenerateError(t('createTooShort'))
+          return
+        }
+        if (generating) return
+        setGenerating(true)
+        setGenerateError('')
+        try {
+          const card = await generateCharacter(kw, effectiveModel)
+          if (card === null) {
+            setGenerateError(t('createFailed'))
+            return
+          }
+          closeCreatePanel()
+          setEditing({
+            id: undefined,
+            name: card.name,
+            avatar: card.avatar,
+            avatarImage: null,
+            portraitImage: null,
+            persona: card.persona,
+            scenario: card.scenario,
+            greeting: card.greeting,
+            desire: card.desire,
+            guard: card.guard,
+          })
+        } finally {
+          setGenerating(false)
+        }
       }
 
       // 回溯：把对话截断到第 index 条之前（该条及其后的内容都会被删掉）。
@@ -804,6 +1271,12 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
         (index) => {
           if (!selected || streaming) return
           setChats((prev) => ({ ...prev, [selected.id]: (prev[selected.id] ?? []).slice(0, index) }))
+          // 记忆游标不能超过截断后的长度，否则新消息进不了摘要。
+          setMemories((prev) => {
+            const mem = prev[selected.id]
+            if (!mem || typeof mem.summarizedUpTo !== 'number' || mem.summarizedUpTo <= index) return prev
+            return { ...prev, [selected.id]: { ...mem, summarizedUpTo: index } }
+          })
           setError('')
         },
         [selected, streaming],
@@ -978,6 +1451,68 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
                   ),
                 )
               : null,
+            memoryPanelOpen && selected
+              ? h(
+                  'div',
+                  { className: 'rp-panel rp-mem-panel' },
+                  h('div', { className: 'rp-panel-title' }, t('memoryLabel')),
+                  h('div', { className: 'rp-panel-hint' }, summariesAvailable ? t('memoryActive') : t('memoryAuto')),
+                  summariesAvailable
+                    ? h(
+                        'div',
+                        { className: 'rp-mem-meta-inline' },
+                        `已压缩 ${currentMemory.summarizedUpTo ?? 0} 条 · ${currentMemory.summary.length} 字`,
+                      )
+                    : null,
+                  h(
+                    'div',
+                    { className: 'rp-mem-btns' },
+                    h(
+                      'button',
+                      { className: 'rp-max-btn', onClick: () => setMemoryViewOpen(true) },
+                      t('memoryView'),
+                    ),
+                    summariesAvailable
+                      ? h(
+                          'button',
+                          { className: 'rp-max-btn', onClick: clearMemory, disabled: streaming },
+                          t('memoryClear'),
+                        )
+                      : null,
+                  ),
+                )
+              : null,
+            statusPanelOpen && selected
+              ? h(
+                  'div',
+                  { className: 'rp-panel rp-mem-panel' },
+                  h('div', { className: 'rp-panel-title' }, t('statusPanelTitle')),
+                  h('div', { className: 'rp-panel-hint' }, t('statusPanelHint')),
+                  statusPending
+                    ? h('div', { className: 'rp-mem-meta-inline' }, t('statusPending'))
+                    : hasStatus
+                      ? h(
+                          'div',
+                          { className: 'rp-status-list' },
+                          currentStatus.mood ? h('div', { className: 'rp-status-row' }, h('b', null, t('statusMood')), h('span', null, currentStatus.mood)) : null,
+                          currentStatus.scene ? h('div', { className: 'rp-status-row' }, h('b', null, t('statusScene')), h('span', null, currentStatus.scene)) : null,
+                          currentStatus.relation ? h('div', { className: 'rp-status-row' }, h('b', null, t('statusRelation')), h('span', null, currentStatus.relation)) : null,
+                        )
+                      : h('div', { className: 'rp-mem-meta-inline' }, t('statusEmpty')),
+                  h(
+                    'div',
+                    { className: 'rp-mem-btns' },
+                    h(
+                      'button',
+                      { className: 'rp-max-btn', onClick: refreshStatus, disabled: statusPending || streaming },
+                      t('statusRefresh'),
+                    ),
+                    hasStatus
+                      ? h('button', { className: 'rp-max-btn', onClick: clearStatus }, t('statusClear'))
+                      : null,
+                  ),
+                )
+              : null,
             h(
               'div',
               { className: 'rp-modebar' },
@@ -985,11 +1520,43 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
                 'button',
                 {
                   className: `rp-modecapsule${maxTension ? ' on' : ''}`,
-                  onClick: () => setModePanelOpen((v) => !v),
+                  onClick: () => {
+                    setMemoryPanelOpen(false)
+                    setModePanelOpen((v) => !v)
+                  },
                   title: t('dialogueMode'),
                 },
                 maxTension ? h('span', { className: 'dot' }) : null,
                 modeCapsuleLabel(),
+              ),
+              h(
+                'button',
+                {
+                  className: `rp-modecapsule${summariesAvailable ? ' on' : ''}`,
+                  onClick: () => {
+                    setModePanelOpen(false)
+                    setMemoryPanelOpen((v) => !v)
+                  },
+                  title: t('memoryLabel'),
+                },
+                summariesAvailable ? h('span', { className: 'dot' }) : null,
+                summariesAvailable
+                  ? `${t('memoryLabel')} · ${currentMemory.summarizedUpTo ?? 0} ${t('memoryCountUnit')}`
+                  : t('memoryLabel'),
+              ),
+              h(
+                'button',
+                {
+                  className: `rp-modecapsule${hasStatus ? ' on' : ''}`,
+                  onClick: () => {
+                    setModePanelOpen(false)
+                    setMemoryPanelOpen(false)
+                    setStatusPanelOpen((v) => !v)
+                  },
+                  title: t('statusLabel'),
+                },
+                currentStatus?.mood ? h('span', { className: 'dot' }) : null,
+                hasStatus ? `${t('statusLabel')} · ${currentStatus.mood || t('statusRelation')}` : t('statusLabel'),
               ),
             ),
             h(
@@ -1046,7 +1613,7 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
               { className: 'rp-side-foot' },
               h(
                 'button',
-                { className: 'rp-btn', style: { width: '100%' }, onClick: startNew },
+                { className: 'rp-btn', style: { width: '100%' }, onClick: () => setCreatePanelOpen(true) },
                 `+ ${t('newCharacter')}`,
               ),
             ),
@@ -1057,10 +1624,135 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
             main,
           ),
         ),
+        createPanelOpen
+          ? h(
+              'div',
+              {
+                className: 'rp-mem-overlay',
+                onClick: (e) => {
+                  if (e.target === e.currentTarget) closeCreatePanel()
+                },
+              },
+              h(
+                'div',
+                { className: 'rp-mem-modal', style: { maxHeight: 'min(80vh, 640px)' } },
+                h(
+                  'div',
+                  { className: 'rp-mem-head' },
+                  h('div', { className: 'rp-mem-head-title' }, t('createTitle')),
+                  h('button', { className: 'rp-btn', onClick: closeCreatePanel }, t('cancel')),
+                ),
+                h(
+                  'div',
+                  { className: 'rp-mem-body', style: { paddingTop: '14px' } },
+                  createMode === null
+                    ? h(
+                        'div',
+                        { className: 'rp-create-choices' },
+                        h(
+                          'button',
+                          {
+                            className: 'rp-create-choice',
+                            onClick: () => {
+                              closeCreatePanel()
+                              startNew()
+                            },
+                          },
+                          h('b', null, t('createCustom')),
+                          h('span', null, t('createCustomDesc')),
+                        ),
+                        h(
+                          'button',
+                          {
+                            className: 'rp-create-choice',
+                            onClick: () => setCreateMode('random'),
+                          },
+                          h('b', null, t('createRandom')),
+                          h('span', null, t('createRandomDesc')),
+                        ),
+                      )
+                    : h(
+                        'div',
+                        { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
+                        h('label', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary)' } }, t('createKeywords')),
+                        h('input', {
+                          className: 'rp-text',
+                          value: keywords,
+                          placeholder: t('createKeywordsPlaceholder'),
+                          disabled: generating,
+                          autoFocus: true,
+                          onChange: (e) => setKeywords(e.target.value),
+                          onKeyDown: (e) => {
+                            if (e.key === 'Enter') runGenerate()
+                          },
+                        }),
+                        h('div', { style: { fontSize: '11px', color: 'var(--dsw-alias-label-secondary)' } }, t('createKeywordsHint')),
+                        generateError === ''
+                          ? null
+                          : h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-state-error-primary)' } }, generateError),
+                        h(
+                          'div',
+                          { style: { display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '4px' } },
+                          h('button', { className: 'rp-btn', onClick: () => setCreateMode(null), disabled: generating }, t('cancel')),
+                          h(
+                            'button',
+                            { className: 'rp-btn primary', onClick: runGenerate, disabled: generating },
+                            generating ? t('createGenerating') : t('createGenerate'),
+                          ),
+                        ),
+                      ),
+                ),
+              ),
+            )
+          : null,
+        memoryViewOpen && selected
+          ? h(
+              'div',
+              {
+                className: 'rp-mem-overlay',
+                onClick: (e) => {
+                  if (e.target === e.currentTarget) setMemoryViewOpen(false)
+                },
+              },
+              h(
+                'div',
+                { className: 'rp-mem-modal' },
+                h(
+                  'div',
+                  { className: 'rp-mem-head' },
+                  h('span', { className: 'rp-avatar' }, h(Avatar, { char: selected })),
+                  h('div', { className: 'rp-mem-head-title' }, `${t('memoryViewTitle')} · ${selected.name}`),
+                  h('button', { className: 'rp-btn', onClick: () => setMemoryViewOpen(false) }, t('memoryClose')),
+                ),
+                summariesAvailable
+                  ? h(
+                      'div',
+                      { className: 'rp-mem-meta' },
+                      `${t('memoryCount')} ${currentMemory.summarizedUpTo ?? 0} ${t('memoryCountUnit')} · ${currentMemory.summary.length} 字`,
+                    )
+                  : null,
+                h(
+                  'div',
+                  { className: 'rp-mem-body' },
+                  summariesAvailable
+                    ? currentMemory.summary
+                    : h('span', { className: 'rp-mem-empty' }, t('memoryEmpty')),
+                ),
+                summariesAvailable
+                  ? h(
+                      'div',
+                      { className: 'rp-mem-foot' },
+                      h('button', { className: 'rp-btn danger', onClick: clearMemory, disabled: streaming }, t('memoryClear')),
+                    )
+                  : null,
+              ),
+            )
+          : null,
       )
     }
 
-    function Editor({ t, draft, onSave, onCancel, onDelete }) {      const [name, setName] = useState(draft.name)
+    function Editor({ t, draft, onSave, onCancel, onDelete }) {
+      const [name, setName] = useState(draft.name)
       const [avatar, setAvatar] = useState(draft.avatar)
       const [avatarImage, setAvatarImage] = useState(draft.avatarImage ?? null)
       const [portraitImage, setPortraitImage] = useState(draft.portraitImage ?? null)
@@ -1183,6 +1875,33 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
         const slots = ctx.get('slots')
         if (slots === undefined) throw new Error('roleplay chat requires the client slots service')
         const t = (key) => ZH[key] ?? key
+
+        // 对外暴露共享接口，供子插件（如多角色故事模式）读写角色卡与调用模型。
+        const hub = {
+          /** 当前全部角色卡（只读快照） */
+          getCharacters: () => SHARED.characters.slice(),
+          /** 按 id 取单个角色 */
+          getCharacter: (id) => SHARED.characters.find((c) => c.id === id) ?? null,
+          /** 当前模型选择 */
+          getModel: () => SHARED.model,
+          /** 单次补全，子插件可直接复用 */
+          complete: (system, userText, opts) =>
+            completeOnce(system, userText, SHARED.model, opts?.temperature ?? 0.5, opts?.maxTokens ?? 900),
+          /** 订阅角色卡变化，返回取消订阅函数 */
+          onChange: (fn) => {
+            if (typeof fn !== 'function') return () => {}
+            SHARED.listeners.add(fn)
+            return () => SHARED.listeners.delete(fn)
+          },
+        }
+        const provideDisposer = typeof ctx.provide === 'function' ? ctx.provide('roleplayChat', hub) : undefined
+        // 双通道：除了 Cordis 服务，也挂到全局，供其他插件的 Client 半部稳定取用。
+        try {
+          window.__DSH_ROLEPLAY_HUB__ = hub
+        } catch {
+          /* 非浏览器环境忽略 */
+        }
+
         const disposer = slots.inject('conversation.view', () =>
           slots.register({ name: 'conversation.view', id: 'roleplay-chat', order: 50, label: () => t('viewLabel') }, (props) =>
             RoleplayView({ ...props, t }),
@@ -1193,6 +1912,18 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
             disposer()
           } catch {
             /* best-effort teardown */
+          }
+          if (typeof provideDisposer === 'function') {
+            try {
+              provideDisposer()
+            } catch {
+              /* best-effort teardown */
+            }
+          }
+          try {
+            if (window.__DSH_ROLEPLAY_HUB__ === hub) delete window.__DSH_ROLEPLAY_HUB__
+          } catch {
+            /* 非浏览器环境忽略 */
           }
         }
       },
