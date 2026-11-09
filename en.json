@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Roleplay chat",
-    "description": "A lightweight roleplay chat with freely configurable character cards — install and play. Three dialogue lengths, a one-tap tension boost, automatic memory and a character status bar. Pair with the Multi-character story add-on to let several characters interact together."
+    "description": "A lightweight roleplay chat with freely configurable character cards — install and play. Three dialogue lengths, a one-tap tension boost, automatic memory and a character status bar. Memory, conversations and character cards are all kept in the browser's local storage: nothing is written to disk, and switching browsers or clearing browser data wipes them. Pair with the Multi-character story add-on to let several characters interact together."
   }
 }

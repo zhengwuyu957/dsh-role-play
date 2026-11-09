@@ -21,13 +21,73 @@ window.__ModuleLoader__.load({
     const LS_MAX = 'rpChat.maxTension.v1'
     const LS_MEMORY = 'rpChat.memory.v1'
     const LS_STATUS = 'rpChat.status.v1'
+    // 每个角色对「用户是谁」的认知：姓名、性格、性别。
+    const LS_PROFILE = 'rpChat.userProfile.v1'
 
     /** 与子插件共享的运行时快照，由 RoleplayView 在状态变化时同步。 */
     const SHARED = {
       characters: [],
       model: null,
       listeners: new Set(),
+      // 外部写入计数：子插件建卡后自增，挂载中的界面据此重新拉取。
+      version: 0,
     }
+
+    /**
+     * 直接把角色卡落盘并刷新共享快照。
+     * 放在模块级是关键：子插件可能在本视图从未被打开过时就要建卡，
+     * 那时组件没挂载，任何依赖 useState 的写法都会失败。
+     */
+    function persistCharacters(cards) {
+      const next = Array.isArray(cards) ? cards : []
+      saveJson(LS_CHARACTERS, next)
+      SHARED.characters = next.slice()
+      SHARED.version += 1
+      publishShared()
+    }
+
+    /**
+     * 新增一张角色卡（供子插件调用）。重名时拒绝，保证幂等。
+     * @returns {{id: string, name: string} | null}
+     */
+    function addCharacterCard(card) {
+      const name = typeof card?.name === 'string' ? card.name.trim() : ''
+      if (name === '') return null
+      const current = loadJson(LS_CHARACTERS, [])
+      if (!Array.isArray(current)) return null
+      if (current.some((c) => c?.name === name)) return null
+      const record = {
+        id: newId(),
+        name,
+        avatar: (card?.avatar ?? '').trim().slice(0, 4) || '🎭',
+        avatarImage: null,
+        portraitImage: null,
+        gender: normalizeGender(card?.gender),
+        persona: card?.persona ?? '',
+        scenario: card?.scenario ?? '',
+        greeting: card?.greeting ?? '',
+        desire: card?.desire ?? '',
+        guard: card?.guard ?? '',
+      }
+      persistCharacters([...current, record])
+      return record
+    }
+    /**
+     * 把各种写法的性别收敛成三个值：'男' | '女' | ''（未指定）。
+     * 模型和用户都可能写成 male/female/男性/女性，这里统一。
+     */
+    function normalizeGender(raw) {
+      if (typeof raw !== 'string') return ''
+      const v = raw.trim().toLowerCase()
+      if (v === '') return ''
+      if (/^(男|男性|男的|male|m|man|boy)$/.test(v)) return '男'
+      if (/^(女|女性|女的|female|f|woman|girl)$/.test(v)) return '女'
+      // 兼容「男性，35岁」这种带修饰的写法
+      if (/男/.test(v)) return '男'
+      if (/女/.test(v)) return '女'
+      return ''
+    }
+
     function publishShared() {
       for (const fn of SHARED.listeners) {
         try {
@@ -36,6 +96,14 @@ window.__ModuleLoader__.load({
           /* 子插件的监听器出错不应影响主插件 */
         }
       }
+    }
+    // 模块加载时就把磁盘上的角色卡读进快照：子插件可能先于本视图被打开，
+    // 那时成员列表不能是空的。
+    try {
+      const initial = loadJson(LS_CHARACTERS, [])
+      if (Array.isArray(initial)) SHARED.characters = initial.slice()
+    } catch {
+      /* 读不到就让界面首次渲染时自己填 */
     }
 
     // 滚动摘要参数：最近这么多条原文保留，更早的部分压缩成「前情提要」。
@@ -114,6 +182,21 @@ window.__ModuleLoader__.load({
       rewindTitle: '回溯：删掉这一条及其后面的对话',
       fieldName: '名字',
       fieldAvatar: '头像（emoji 备用）',
+      fieldGender: '性别',
+      genderUnset: '未指定',
+      genderMale: '男',
+      genderFemale: '女',
+      genderHint: '这个角色自己的性别。填了之后，叙述里会用正确的「他」或「她」指代角色。',
+      profileLabel: '对你的认知',
+      profileTitle: '对你的认知',
+      profileHint: '眼里的你是什么样子，只影响这个角色',
+      profileName: '你的名字',
+      profileNamePlaceholder: '角色怎么称呼你',
+      profileGender: '你的性别',
+      profileGenderHint: '留空则跟随角色卡上的性别',
+      profilePersona: '你在他眼里的样子',
+      profilePersonaPlaceholder: '例如：话不多但很敏锐的人，总是先替别人着想，讨厌被同情',
+      profileClear: '清空',
       fieldAvatarImage: '角色图（导入本地 PNG）',
       importImage: '导入图片…',
       clearImage: '移除图片',
@@ -237,6 +320,12 @@ window.__ModuleLoader__.load({
 .rp-placeholder{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--dsw-alias-label-secondary)}
 .rp-editor{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px;max-width:720px}
 .rp-field{display:flex;flex-direction:column;gap:4px}
+.rp-gender{display:flex;gap:6px}
+.rp-gender-btn{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);border-radius:7px;padding:4px 14px;font:inherit;font-size:12px;cursor:pointer}
+.rp-gender-btn:hover{border-color:var(--dsw-alias-border-l2)}
+.rp-gender-btn.on{background:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary);color:#fff}
+.rp-profile-field{display:flex;flex-direction:column;gap:4px;margin-bottom:8px}
+.rp-profile-field label{font-size:11px;color:var(--dsw-alias-label-secondary)}
 .rp-field label{font-size:12px;color:var(--dsw-alias-label-secondary)}
 .rp-text{font:inherit;color:inherit;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:7px 9px;outline:none}
 .rp-text:focus{border-color:var(--dsw-alias-brand-primary)}
@@ -331,11 +420,12 @@ ${transcript}
 
     /**
      * 单次非流式补全，复用 /rp-chat/api/chat 的流式接口把内容拼起来。
-     * @returns 完整文本；失败返回 null
+     * @returns 完整文本；失败时抛出带原因的错误（调用方决定是否降级）
      */
     async function completeOnce(system, userText, model, temperature = 0.4, maxTokens = 800) {
+      let res
       try {
-        const res = await fetch('/rp-chat/api/chat', {
+        res = await fetch('/rp-chat/api/chat', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
@@ -346,23 +436,39 @@ ${transcript}
             maxTokens,
           }),
         })
-        if (!res.ok || !res.body) return null
-        const reader = res.body.getReader()
-        const decoder = new TextDecoder()
-        let buffer = ''
-        let acc = ''
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-          buffer = parseSseChunk(buffer + decoder.decode(value, { stream: true }), (event) => {
-            if (event.type === 'delta' && typeof event.text === 'string') acc += event.text
-          })
-        }
-        const text = acc.trim()
-        return text === '' ? null : text
-      } catch {
-        return null
+      } catch (error) {
+        throw new Error(`请求没发出去：${error instanceof Error ? error.message : String(error)}`)
       }
+      if (!res.ok) {
+        // 把服务端的真实报错读出来，别只留一个空结果。
+        let detail = ''
+        try {
+          const text = await res.text()
+          const parsed = JSON.parse(text)
+          detail = typeof parsed?.error === 'string' ? parsed.error : text.slice(0, 200)
+        } catch {
+          detail = ''
+        }
+        throw new Error(`接口返回 ${res.status}${detail === '' ? '' : `：${detail}`}`)
+      }
+      if (!res.body) throw new Error('接口没有返回内容流')
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let acc = ''
+      let streamError = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer = parseSseChunk(buffer + decoder.decode(value, { stream: true }), (event) => {
+          if (event.type === 'delta' && typeof event.text === 'string') acc += event.text
+          else if (event.type === 'error' && typeof event.message === 'string') streamError = event.message
+        })
+      }
+      if (streamError !== '') throw new Error(`模型报错：${streamError}`)
+      const text = acc.trim()
+      if (text === '') throw new Error('模型返回了空内容')
+      return text
     }
 
     /**
@@ -381,7 +487,12 @@ ${char.persona ? `角色设定：${char.persona.slice(0, 300)}\n` : ''}最近对
 ${transcript}
 
 请根据这段对话，输出角色此刻的情绪、所在场景、以及对用户的态度。`
-      const raw = await completeOnce(system, userText, model, 0.3, 300)
+      let raw
+      try {
+        raw = await completeOnce(system, userText, model, 0.3, 300)
+      } catch {
+        return null
+      }
       if (raw === null) return null
       try {
         const cleaned = raw.replace(/```json|```/g, '').trim()
@@ -415,8 +526,13 @@ ${transcript}
       const system = `你是角色设定助手。根据用户给的关键词，设计一个鲜活的角色扮演角色。
 必须只输出一个 JSON 对象，不要任何解释、不要代码块标记、不要嵌套（所有字段都是字符串，不要有子对象）。
 字段名必须用下列英文键，不要翻译成中文：
-{"name":"名字","avatar":"一个贴切的 emoji","persona":"人物设定，200-350字，写清性格、说话方式、背景、习惯动作","scenario":"情景与世界观，80-150字，说明你们的关系和当前处境","greeting":"开场白，角色说的第一句话，可带括号动作","desire":"这个角色想要什么（推动剧情的欲望），30-60字","guard":"这个角色的心理防线，30-60字"}`
-      const raw = await completeOnce(system, `关键词：${keywords}`, model, 0.9, 1400)
+{"name":"名字","avatar":"一个贴切的 emoji","gender":"男 或 女","persona":"人物设定，200-350字，写清性格、说话方式、背景、习惯动作","scenario":"情景与世界观，80-150字，说明你们的关系和当前处境","greeting":"开场白，角色说的第一句话，可带括号动作","desire":"这个角色想要什么（推动剧情的欲望），30-60字","guard":"这个角色的心理防线，30-60字"}`
+      let raw
+      try {
+        raw = await completeOnce(system, `关键词：${keywords}`, model, 0.9, 1400)
+      } catch {
+        return null
+      }
       if (raw === null) return null
       try {
         const cleaned = raw.replace(/```json|```/g, '').trim()
@@ -450,6 +566,7 @@ ${transcript}
       const ALIASES = {
         name: ['name', '名字', '姓名', '角色名', '角色', '人物名'],
         avatar: ['avatar', '头像', 'emoji', '表情'],
+        gender: ['gender', '性别', 'sex'],
         persona: ['persona', '人设', '人物设定', '性格', '设定', '背景', '角色设定'],
         scenario: ['scenario', '情景', '世界观', '场景', '情境', '背景设定', '当前处境'],
         greeting: ['greeting', '开场白', '第一句话', '开场', '初始台词'],
@@ -471,6 +588,7 @@ ${transcript}
       return {
         name,
         avatar,
+        gender: normalizeGender(pick('gender')),
         persona: pick('persona'),
         scenario: pick('scenario'),
         greeting: pick('greeting'),
@@ -518,9 +636,40 @@ ${transcript}
       })
     }
 
-    function buildSystem(char, dialogueMode, maxTension, memorySummary) {
+    function buildSystem(char, dialogueMode, maxTension, memorySummary, userProfile) {
       const parts = []
+      const profile = userProfile && typeof userProfile === 'object' ? userProfile : {}
+
+      // 角色自己的性别：用于第三人称叙述时指代角色。
+      const charGender = char?.gender === '男' || char?.gender === '女' ? char.gender : ''
+      const charGenderText = charGender === '男' ? '男性' : charGender === '女' ? '女性' : '性别未指定'
+      const charPronoun = charGender === '男' ? '他' : charGender === '女' ? '她' : '对方'
+
+      // 用户性别：优先取「对你的认知」里单独设的；没设就跟随角色卡的性别。
+      const profileGender = profile.gender === '男' || profile.gender === '女' ? profile.gender : ''
+      const known = profileGender !== '' ? profileGender : charGender
+      const userGenderText = known === '男' ? '男性' : known === '女' ? '女性' : '性别未说明（不要擅自假设，用中性说法）'
+      const userPronoun = known === '男' ? '他' : known === '女' ? '她' : '对方'
+
+      const userName = typeof profile.name === 'string' ? profile.name.trim() : ''
+      const userPersona = typeof profile.persona === 'string' ? profile.persona.trim() : ''
+      // 「你对用户的认知」：姓名和性格由用户单独设置，只影响这个角色怎么看用户。
+      const profileBits = []
+      if (userName !== '') profileBits.push(`- 用户的姓名是「${userName}」，可以这样称呼他。`)
+      if (userPersona !== '') profileBits.push(`- 用户是这个样子的人：${userPersona}`)
+      const profileBlock =
+        profileBits.length === 0
+          ? ''
+          : `
+
+2.3 你对用户的认知（这是「${char.name}」个人视角下的印象，按它来对待用户）：
+${profileBits.join('\n')}
+     这些是你已经知道的事，不要表现得像是第一次听说，也不要在对话里复述设定，自然地用出来。`
       parts.push(`你正在扮演角色「${char.name}」进行沉浸式角色扮演对话。始终保持角色，不要替用户发言或行动，用用户使用的语言回复。`)
+      // 角色自己的性别：只在角色卡填了的时候说明，避免模型瞎猜。
+      if (charGender !== '') {
+        parts.push(`【你的性别】${char.name} 是${charGenderText}。用第三人称叙述自己时用「${charPronoun}」，不要搞错。`)
+      }
       // 张力 MAX 放在最前面：模型对开头指令的服从度最高，放在末尾容易被后续格式要求稀释。
       if (maxTension) {
         parts.push(`【张力 MAX 模式·本轮强制执行】
@@ -588,6 +737,8 @@ ${summary}`)
 2.1 人称（重要）：括号里的动作描写中，指代用户时一律用「你」，绝对不要用「他」「她」「对方」「这个人」等第三人称。你是在和用户面对面互动，不是旁观者。
      正确：（你低头的样子，我看见了）/（把手搭在你肩上）/（把杯子推到你面前）
      错误：（看着他的侧脸）/（她注意到对方的表情）/（他的手在抖）——这类把用户写成第三方的写法一律禁止。
+2.2 用户的性别（重要）：用户是${userGenderText}。需要指代用户时用「${userPronoun}」相关的说法，不要搞错性别。
+     注意：台词和动作描写仍然用「你」，这一条只影响你叙述用户、提到用户性别特征时的用词，以及你如何看待、如何称呼用户。${profileBlock}
 3. 角色的心理活动也用中文全角括号括起，并在括号内以角色名加冒号开头，格式为：（${char.name}：所想的）。
 4. 括号内的每段只写一段内容；对话与括号内容交替出现。
 
@@ -812,6 +963,12 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
       const [statuses, setStatuses] = useState(() => loadJson(LS_STATUS, {}))
       const [statusPanelOpen, setStatusPanelOpen] = useState(false)
       const [statusPending, setStatusPending] = useState(false)
+      // 每个角色对用户的认知：{ [charId]: { name, persona, gender } }
+      const [userProfiles, setUserProfiles] = useState(() => {
+        const v = loadJson(LS_PROFILE, {})
+        return v && typeof v === 'object' && !Array.isArray(v) ? v : {}
+      })
+      const [profilePanelOpen, setProfilePanelOpen] = useState(false)
       // 添加角色：选择面板 + 关键词生成。
       const [createPanelOpen, setCreatePanelOpen] = useState(false)
       const [createMode, setCreateMode] = useState(null) // 'custom' | 'random'
@@ -821,6 +978,9 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
       // 摘要更新不应重建 runCompletion（否则会打断进行中的流式回复），用 ref 读取最新值。
       const memoriesRef = useRef(memories)
       memoriesRef.current = memories
+      // 同上：用户的「对你的认知」改动后也要立刻生效，不重建回调。
+      const userProfilesRef = useRef(userProfiles)
+      userProfilesRef.current = userProfiles
       const [modePanelOpen, setModePanelOpen] = useState(false)
       const [memoryViewOpen, setMemoryViewOpen] = useState(false)
       const [memoryPanelOpen, setMemoryPanelOpen] = useState(false)
@@ -864,6 +1024,13 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
       useEffect(() => {
         saveJson(LS_MODEL, selectedModel)
       }, [selectedModel])
+      // 把当前生效的模型同步给共享快照，子插件（多角色故事）调用模型时才用得上。
+      // 依赖用 modelKey 字符串，避免每次渲染的新对象导致 effect 反复触发。
+      const effectiveModelKey = modelKey(effectiveModel)
+      useEffect(() => {
+        SHARED.model = effectiveModel ?? null
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, [effectiveModelKey])
       useEffect(() => {
         saveJson(LS_MODE, dialogueMode)
       }, [dialogueMode])
@@ -876,6 +1043,9 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
       useEffect(() => {
         saveJson(LS_STATUS, statuses)
       }, [statuses])
+      useEffect(() => {
+        saveJson(LS_PROFILE, userProfiles)
+      }, [userProfiles])
 
       useEffect(() => {
         saveJson(LS_CHARACTERS, characters)
@@ -951,6 +1121,7 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
                 ? draft.avatarImage
                 : null,
           persona: draft.persona ?? '',
+          gender: normalizeGender(draft.gender),
           scenario: draft.scenario ?? '',
           greeting: draft.greeting ?? '',
           desire: draft.desire ?? '',
@@ -965,6 +1136,20 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
         })
         setEditing(null)
         setSelectedId(id)
+      }, [])
+
+      // 子插件可能在本视图没打开过时建卡（模块级的 addCharacterCard 会直接落盘），
+      // 这里订阅版本号，界面打开后立即把新卡同步进来。
+      useEffect(() => {
+        const seen = SHARED.version
+        const pull = () => {
+          if (SHARED.version === seen) return
+          const disk = loadJson(LS_CHARACTERS, [])
+          if (Array.isArray(disk)) setCharacters(disk)
+        }
+        const off = SHARED.listeners.add(pull)
+        pull()
+        return () => SHARED.listeners.delete(off)
       }, [])
 
       const deleteCharacter = useCallback((id) => {
@@ -1023,7 +1208,13 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
               method: 'POST',
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify({
-                system: buildSystem(char, dialogueMode, maxTension, mem?.summary ?? ''),
+                system: buildSystem(
+                  char,
+                  dialogueMode,
+                  maxTension,
+                  mem?.summary ?? '',
+                  userProfilesRef.current[char.id] ?? null,
+                ),
                 messages: trimmed.map((m) => ({ role: m.role, text: m.text })),
                 ...(effectiveModel ? { provider: effectiveModel.provider, model: effectiveModel.model } : {}),
                 // 温和的采样，让表达更自然、少一点八股味。
@@ -1139,27 +1330,30 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
           avatar: char.avatar,
           avatarImage: char.avatarImage ?? null,
           portraitImage: char.portraitImage ?? char.avatarImage ?? null,
+          // 性别必须带上，否则重新打开编辑器会读不到已保存的值，显示成「未指定」。
+          gender: char.gender ?? '',
           persona: char.persona,
           scenario: char.scenario,
           greeting: char.greeting,
           desire: char.desire ?? '',
           guard: char.guard ?? '',
         })
-      const startNew = () => setEditing({ id: undefined, name: '', avatar: '', avatarImage: null, portraitImage: null, persona: '', scenario: '', greeting: '', desire: '', guard: '' })
+      const startNew = () => setEditing({ id: undefined, name: '', avatar: '', avatarImage: null, portraitImage: null, gender: '', persona: '', scenario: '', greeting: '', desire: '', guard: '' })
 
-      // 点面板外部关闭（对话模式 / 记忆），符合浮层的常见交互习惯。
+      // 点面板外部关闭（对话模式 / 记忆 / 状态 / 认知），符合浮层的常见交互习惯。
       useEffect(() => {
-        if (!modePanelOpen && !memoryPanelOpen && !statusPanelOpen) return
+        if (!modePanelOpen && !memoryPanelOpen && !statusPanelOpen && !profilePanelOpen) return
         const onDown = (e) => {
           const el = e.target
           if (el && typeof el.closest === 'function' && el.closest('.rp-panel, .rp-modebar')) return
           setModePanelOpen(false)
           setMemoryPanelOpen(false)
           setStatusPanelOpen(false)
+          setProfilePanelOpen(false)
         }
         window.addEventListener('mousedown', onDown)
         return () => window.removeEventListener('mousedown', onDown)
-      }, [modePanelOpen, memoryPanelOpen, statusPanelOpen])
+      }, [modePanelOpen, memoryPanelOpen, statusPanelOpen, profilePanelOpen])
 
       // 记忆弹层：Esc 关闭。
       useEffect(() => {
@@ -1221,6 +1415,38 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
           const next = { ...prev }
           delete next[selected.id]
           return next
+        })
+      }
+
+      // 「对你的认知」：当前角色怎么看待用户。每个角色各存一份。
+      const currentProfile = selected
+        ? {
+            name: userProfiles[selected.id]?.name ?? '',
+            persona: userProfiles[selected.id]?.persona ?? '',
+            gender: userProfiles[selected.id]?.gender ?? '',
+          }
+        : { name: '', persona: '', gender: '' }
+      const hasProfile = Boolean(currentProfile.name || currentProfile.persona || currentProfile.gender)
+      const updateProfile = (patch) => {
+        if (!selected) return
+        setUserProfiles((prev) => {
+          const base = prev[selected.id] ?? { name: '', persona: '', gender: '' }
+          const next = { ...base, ...patch }
+          // 三项都清空就把这条记录删掉，避免 localStorage 里堆积空对象。
+          if (next.name === '' && next.persona === '' && next.gender === '') {
+            const copy = { ...prev }
+            delete copy[selected.id]
+            return copy
+          }
+          return { ...prev, [selected.id]: next }
+        })
+      }
+      const clearProfile = () => {
+        if (!selected) return
+        setUserProfiles((prev) => {
+          const copy = { ...prev }
+          delete copy[selected.id]
+          return copy
         })
       }
 
@@ -1513,6 +1739,68 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
                   ),
                 )
               : null,
+            profilePanelOpen && selected
+              ? h(
+                  'div',
+                  { className: 'rp-panel rp-mem-panel' },
+                  h('div', { className: 'rp-panel-title' }, t('profileTitle')),
+                  h('div', { className: 'rp-panel-hint' }, `${selected.name} ${t('profileHint')}`),
+                  h(
+                    'div',
+                    { className: 'rp-profile-field' },
+                    h('label', null, t('profileName')),
+                    h('input', {
+                      className: 'rp-text',
+                      value: currentProfile.name,
+                      placeholder: t('profileNamePlaceholder'),
+                      onChange: (e) => updateProfile({ name: e.target.value }),
+                      maxLength: 20,
+                    }),
+                  ),
+                  h(
+                    'div',
+                    { className: 'rp-profile-field' },
+                    h('label', null, t('profileGender')),
+                    h(
+                      'div',
+                      { className: 'rp-gender' },
+                      [['', t('genderUnset')], ['男', t('genderMale')], ['女', t('genderFemale')]].map(([v, label]) =>
+                        h(
+                          'button',
+                          {
+                            key: v === '' ? 'u' : v,
+                            type: 'button',
+                            className: `rp-gender-btn${currentProfile.gender === v ? ' on' : ''}`,
+                            onClick: () => updateProfile({ gender: v }),
+                          },
+                          label,
+                        ),
+                      ),
+                    ),
+                    h('div', { style: { fontSize: '11px', color: 'var(--dsw-alias-label-secondary)' } }, t('profileGenderHint')),
+                  ),
+                  h(
+                    'div',
+                    { className: 'rp-profile-field' },
+                    h('label', null, t('profilePersona')),
+                    h('textarea', {
+                      className: 'rp-text rp-textarea',
+                      style: { minHeight: '64px' },
+                      value: currentProfile.persona,
+                      placeholder: t('profilePersonaPlaceholder'),
+                      onChange: (e) => updateProfile({ persona: e.target.value }),
+                      maxLength: 300,
+                    }),
+                  ),
+                  h(
+                    'div',
+                    { className: 'rp-mem-btns' },
+                    hasProfile
+                      ? h('button', { className: 'rp-max-btn', onClick: clearProfile }, t('profileClear'))
+                      : null,
+                  ),
+                )
+              : null,
             h(
               'div',
               { className: 'rp-modebar' },
@@ -1522,6 +1810,7 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
                   className: `rp-modecapsule${maxTension ? ' on' : ''}`,
                   onClick: () => {
                     setMemoryPanelOpen(false)
+                    setProfilePanelOpen(false)
                     setModePanelOpen((v) => !v)
                   },
                   title: t('dialogueMode'),
@@ -1535,6 +1824,7 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
                   className: `rp-modecapsule${summariesAvailable ? ' on' : ''}`,
                   onClick: () => {
                     setModePanelOpen(false)
+                    setProfilePanelOpen(false)
                     setMemoryPanelOpen((v) => !v)
                   },
                   title: t('memoryLabel'),
@@ -1551,12 +1841,30 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
                   onClick: () => {
                     setModePanelOpen(false)
                     setMemoryPanelOpen(false)
+                    setProfilePanelOpen(false)
                     setStatusPanelOpen((v) => !v)
                   },
                   title: t('statusLabel'),
                 },
                 currentStatus?.mood ? h('span', { className: 'dot' }) : null,
                 hasStatus ? `${t('statusLabel')} · ${currentStatus.mood || t('statusRelation')}` : t('statusLabel'),
+              ),
+              h(
+                'button',
+                {
+                  className: `rp-modecapsule${hasProfile ? ' on' : ''}`,
+                  onClick: () => {
+                    setModePanelOpen(false)
+                    setMemoryPanelOpen(false)
+                    setStatusPanelOpen(false)
+                    setProfilePanelOpen((v) => !v)
+                  },
+                  title: t('profileTitle'),
+                },
+                hasProfile ? h('span', { className: 'dot' }) : null,
+                hasProfile && currentProfile.name !== ''
+                  ? `${t('profileLabel')} · ${currentProfile.name}`
+                  : t('profileLabel'),
               ),
             ),
             h(
@@ -1758,6 +2066,7 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
       const [portraitImage, setPortraitImage] = useState(draft.portraitImage ?? null)
       const [imageError, setImageError] = useState('')
       const [persona, setPersona] = useState(draft.persona)
+      const [gender, setGender] = useState(draft.gender ?? '')
       const [desire, setDesire] = useState(draft.desire ?? '')
       const [guard, setGuard] = useState(draft.guard ?? '')
       const [scenario, setScenario] = useState(draft.scenario)
@@ -1846,6 +2155,28 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
         ),
         field(t('fieldName'), 'Name', name, setName, { autoFocus: true }),
         field(t('fieldAvatar'), 'Avatar', avatar, setAvatar, { maxLength: 4 }),
+        h(
+          'div',
+          { className: 'rp-field' },
+          h('label', null, t('fieldGender')),
+          h(
+            'div',
+            { className: 'rp-gender' },
+            [['', t('genderUnset')], ['男', t('genderMale')], ['女', t('genderFemale')]].map(([value, label]) =>
+              h(
+                'button',
+                {
+                  key: value === '' ? 'unset' : value,
+                  type: 'button',
+                  className: `rp-gender-btn${gender === value ? ' on' : ''}`,
+                  onClick: () => setGender(value),
+                },
+                label,
+              ),
+            ),
+          ),
+          h('div', { style: { fontSize: '11px', color: 'var(--dsw-alias-label-secondary)' } }, t('genderHint')),
+        ),
         area(t('fieldPersona'), 'Persona', persona, setPersona, '110px'),
         area(t('fieldDesire'), 'Desire', desire, setDesire, '62px'),
         area(t('fieldGuard'), 'Guard', guard, setGuard, '62px'),
@@ -1860,7 +2191,7 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
             'button',
             {
               className: 'rp-btn primary',
-              onClick: () => onSave({ ...draft, name, avatar, avatarImage, portraitImage, persona, scenario, greeting, desire, guard }),
+              onClick: () => onSave({ ...draft, name, avatar, avatarImage, portraitImage, gender, persona, scenario, greeting, desire, guard }),
               disabled: name.trim() === '',
             },
             t('save'),
@@ -1884,15 +2215,47 @@ ${LENGTH_RULES[mode]}${maxTensionLengthNote}
           getCharacter: (id) => SHARED.characters.find((c) => c.id === id) ?? null,
           /** 当前模型选择 */
           getModel: () => SHARED.model,
-          /** 单次补全，子插件可直接复用 */
-          complete: (system, userText, opts) =>
-            completeOnce(system, userText, SHARED.model, opts?.temperature ?? 0.5, opts?.maxTokens ?? 900),
+          /**
+           * 取一个角色的性别（'男' | '女' | ''）。
+           * 用户在故事里扮演某个角色时，用户性别就跟随这个角色的性别。
+           */
+          getGenderOf: (id) => {
+            const c = SHARED.characters.find((x) => x.id === id)
+            return c && (c.gender === '男' || c.gender === '女') ? c.gender : ''
+          },
+          /**
+           * 单次补全，子插件可直接复用。
+           * 成功返回文本；失败返回 null，并把原因放在 hub.lastError 上。
+           */
+          complete: async (system, userText, opts) => {
+            try {
+              const text = await completeOnce(
+                system,
+                userText,
+                SHARED.model,
+                opts?.temperature ?? 0.5,
+                opts?.maxTokens ?? 900,
+              )
+              hub.lastError = ''
+              return text
+            } catch (error) {
+              hub.lastError = error instanceof Error ? error.message : String(error)
+              return null
+            }
+          },
+          /** 最近一次 complete 失败的原因（成功时清空） */
+          lastError: '',
           /** 订阅角色卡变化，返回取消订阅函数 */
           onChange: (fn) => {
             if (typeof fn !== 'function') return () => {}
             SHARED.listeners.add(fn)
             return () => SHARED.listeners.delete(fn)
           },
+          /**
+           * 直接新增一张角色卡（多角色故事自动建卡用）。
+           * @returns {{id: string, name: string} | null} 新建的卡；重名或无效时返回 null
+           */
+          createCharacter: (card) => addCharacterCard(card),
         }
         const provideDisposer = typeof ctx.provide === 'function' ? ctx.provide('roleplayChat', hub) : undefined
         // 双通道：除了 Cordis 服务，也挂到全局，供其他插件的 Client 半部稳定取用。
