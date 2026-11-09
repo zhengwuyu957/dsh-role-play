@@ -1,7 +1,7 @@
 {
   "name": "dsh-role-play",
   "version": "1.0.0",
-  "description": "一个可随意设置角色卡的轻量角色扮演，安装即用，简单易上手。",
+  "description": "一个可随意设置角色卡的轻量角色扮演，安装即用，简单易上手。支持长/中/短三种对话模式，可一键强化情感张力。",
   "type": "module",
   "license": "MIT",
   "keywords": [
